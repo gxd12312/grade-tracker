@@ -1,0 +1,43 @@
+{
+    "version": "0.1.0",
+    "name": "grade-tracker",
+    "scripts": {
+        "build": "next build",
+        "db:push": "prisma db push",
+        "lint": "next lint",
+        "start": "next start",
+        "dev": "next dev",
+        "db:migrate": "prisma migrate dev",
+        "db:generate": "prisma generate"
+    },
+    "devDependencies": {
+        "@types/node": "^20.14.15",
+        "@types/react": "^18.3.3",
+        "@types/react-dom": "^18.3.0",
+        "autoprefixer": "^10.4.20",
+        "eslint": "^8.57.0",
+        "eslint-config-next": "14.2.5",
+        "postcss": "^8.4.41",
+        "prisma": "^5.18.0",
+        "tailwindcss": "^3.4.9",
+        "typescript": "^5.5.4"
+    },
+    "dependencies": {
+        "@next/swc-win32-x64-msvc": "^16.2.10",
+        "@prisma/client": "^5.18.0",
+        "abort-controller": "^3.0.0",
+        "class-variance-authority": "^0.7.0",
+        "clsx": "^2.1.1",
+        "date-fns": "^3.6.0",
+        "lucide-react": "^0.427.0",
+        "next": "^14.2.5",
+        "openai": "^4.56.0",
+        "react": "^18.3.1",
+        "react-dom": "^18.3.1",
+        "tailwind-merge": "^2.5.2",
+        "util-deprecate": "^1.0.2",
+        "whatwg-url": "^17.1.0",
+        "zod": "^3.23.8"
+    },
+    "private": true
+}
