@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(chmod +x \"E:/vibecoding/成绩记录系统/deploy.sh\" \"E:/vibecoding/成绩记录系统/init-ssl.sh\")"
-    ]
-  }
-}

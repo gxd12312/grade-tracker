@@ -28,6 +28,13 @@ yarn-error.log*
 .env
 .env*.local
 
+# local config
+.claude/
+.dev.log
+
+# stray files
+*.tgz
+
 # docker 产生的数据目录
 /data
 /certbot
