@@ -6,3 +6,56 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  students  Student[]
+}
+
+model Student {
+  id        String   @id @default(cuid())
+  name      String
+  grade     String?
+  school    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  exams     Exam[]
+}
+
+model Exam {
+  id          String   @id @default(cuid())
+  name        String
+  subject     String
+  totalScore  Float
+  maxScore    Float
+  examDate    DateTime @default(now())
+  semester    String?
+  analysis    String?
+  rawResponse String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  studentId   String
+  student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  questions   Question[]
+}
+
+model Question {
+  id             String  @id @default(cuid())
+  number         String
+  content        String?
+  score          Float
+  maxScore       Float
+  isCorrect      Boolean
+  knowledgePoint String?
+  suggestion     String?
+  examId         String
+  exam           Exam    @relation(fields: [examId], references: [id], onDelete: Cascade)
+  @@unique([examId, number])
+}

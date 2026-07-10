@@ -4,9 +4,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 
 const AI_NAME = process.env.NEXT_PUBLIC_AI_NAME || 'AI';
 
-interface Student { id: string; name: string; grade?: string | null; }
+interface Student { id: string; name: string; grade?: string | null; school?: string | null; }
 interface Question { id: string; number: string; content?: string | null; score: number; maxScore: number; isCorrect: boolean; knowledgePoint?: string | null; suggestion?: string | null; }
-interface Exam { id: string; subject: string; totalScore: number; maxScore: number; examDate: string; analysis?: string | null; rawResponse?: string | null; student: { name: string; grade?: string | null }; questions: Question[]; }
+interface Exam { id: string; name: string; subject: string; totalScore: number; maxScore: number; examDate: string; semester?: string | null; analysis?: string | null; rawResponse?: string | null; student: { name: string; grade?: string | null; school?: string | null }; questions: Question[]; }
 interface Settings { apiKey: string; baseURL: string; model: string; }
 type Tab = 'overview' | 'upload' | 'history';
 
@@ -46,6 +46,7 @@ export default function HomePage() {
   const [showAddStudent, setShowAddStudent] = useState(false);
   const [newStudentName, setNewStudentName] = useState('');
   const [newStudentGrade, setNewStudentGrade] = useState('');
+  const [newStudentSchool, setNewStudentSchool] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -53,17 +54,42 @@ export default function HomePage() {
   const [selectedExam, setSelectedExam] = useState<Exam | null>(null);
   const [stats, setStats] = useState({ totalExams: 0, avgScore: 0, totalMistakes: 0 });
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [sitePassword, setSitePassword] = useState('');
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [examName, setExamName] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { setSettings(loadSettings()); }, []);
+  useEffect(() => { setSettings(loadSettings()); setSitePassword(localStorage.getItem('site_password') || ''); }, []);
 
   const saveSettings = (s: Settings) => { setSettings(s); localStorage.setItem('ai_settings', JSON.stringify(s)); };
 
+  // Get auth headers for API calls
+  const getAuthHeaders = (): Record<string, string> => {
+    const headers: Record<string, string> = {};
+    const sp = localStorage.getItem('site_password');
+    if (sp) {
+      headers['x-site-auth'] = sp;
+    }
+    return headers;
+  };
+
+  // Handle API errors (especially 401)
+  const handleApiError = async (res: Response) => {
+    if (res.status === 401) {
+      setIsAuthenticated(false);
+      setError('未授权：请在设置中输入访问密码');
+      return true;
+    }
+    return false;
+  };
+
   const loadData = useCallback(async () => {
     try {
-      const [sRes, eRes] = await Promise.all([fetch('/api/students'), fetch('/api/exams')]);
+      const authHeaders = getAuthHeaders();
+      const [sRes, eRes] = await Promise.all([fetch('/api/students', { headers: authHeaders }), fetch('/api/exams', { headers: authHeaders })]);
+      if (await handleApiError(sRes) || await handleApiError(eRes)) return;
       const sData = await sRes.json(); setStudents(sData);
       const eData = await eRes.json(); setExams(eData);
       if (eData.length > 0) {
@@ -80,9 +106,10 @@ export default function HomePage() {
   const handleAddStudent = async () => {
     if (!newStudentName.trim()) return;
     try {
-      const res = await fetch('/api/students', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newStudentName, grade: newStudentGrade }) });
+      const res = await fetch('/api/students', { method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, body: JSON.stringify({ name: newStudentName, grade: newStudentGrade, school: newStudentSchool }) });
+      if (await handleApiError(res)) return;
       const student = await res.json();
-      if (student.id) { setStudents([student, ...students]); setSelectedStudent(student.id); setNewStudentName(''); setNewStudentGrade(''); setShowAddStudent(false); }
+      if (student.id) { setStudents([student, ...students]); setSelectedStudent(student.id); setNewStudentName(''); setNewStudentGrade(''); setNewStudentSchool(''); setShowAddStudent(false); }
     } catch { setError('添加学生失败'); }
   };
 
@@ -96,15 +123,16 @@ export default function HomePage() {
     setUploading(true); setError(''); setUploadSuccess(false);
     try {
       const formData = new FormData();
-      formData.append('file', file); formData.append('studentId', selectedStudent);
+      formData.append('file', file); formData.append('studentId', selectedStudent); formData.append('name', examName);
       const headers: Record<string, string> = {};
       if (settings.apiKey) headers['x-api-key'] = settings.apiKey;
       if (settings.baseURL) headers['x-base-url'] = settings.baseURL;
       if (settings.model) headers['x-model'] = settings.model;
-      const res = await fetch('/api/parse', { method: 'POST', body: formData, headers });
+      const res = await fetch('/api/parse', { method: 'POST', body: formData, headers: { ...headers, ...getAuthHeaders() } });
+      if (await handleApiError(res)) { setUploading(false); return; }
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || '解析失败');
-      setFile(null); setPreview(null); setUploadSuccess(true);
+      setFile(null); setPreview(null); setUploadSuccess(true); setExamName('');
       await loadData();
     } catch (err: any) {
       setError(err.message || '上传解析失败，请重试');
@@ -116,7 +144,8 @@ export default function HomePage() {
   const handleDeleteExam = async (id: string) => {
     if (!confirm('确定要删除这条考试记录吗？')) return;
     try {
-      await fetch('/api/exams/' + id, { method: 'DELETE' });
+      const delRes = await fetch('/api/exams/' + id, { method: 'DELETE', headers: getAuthHeaders() });
+      if (await handleApiError(delRes)) return;
       if (selectedExam?.id === id) setSelectedExam(null);
       await loadData();
     } catch { setError('删除失败'); }
@@ -161,7 +190,12 @@ export default function HomePage() {
                     <input type="text" placeholder="gpt-4o" value={settings.model} onChange={(e) => setSettings({ ...settings, model: e.target.value })} className="w-full rounded-xl bg-white/15 border border-white/20 px-4 py-2.5 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-white/30 transition" />
                   </div>
                 </div>
-                <button onClick={() => { saveSettings(settings); setShowSettings(false); }} className="w-full rounded-xl bg-white text-indigo-700 py-2.5 text-sm font-semibold hover:bg-white/90 transition-colors">保存设置</button>
+                <div className="border-t border-white/10 pt-3 mt-3">
+                  <label className="block text-xs font-medium text-indigo-100 mb-1.5">网站访问密码（可选）</label>
+                  <input type="password" placeholder="设置密码后，API 访问需要验证" value={sitePassword} onChange={(e) => setSitePassword(e.target.value)} className="w-full rounded-xl bg-white/15 border border-white/20 px-4 py-2.5 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-white/30 transition" />
+                  <p className="text-xs text-indigo-200 mt-1">设置后请妥善保管，所有写操作需要此密码</p>
+                </div>
+                <button onClick={() => { saveSettings(settings); localStorage.setItem('site_password', sitePassword); setShowSettings(false); }} className="w-full rounded-xl bg-white text-indigo-700 py-2.5 text-sm font-semibold hover:bg-white/90 transition-colors">保存设置</button>
               </div>
             </div>
           )}
@@ -187,6 +221,7 @@ export default function HomePage() {
               <p className="text-sm font-semibold text-gray-700">添加学生</p>
               <input type="text" placeholder="姓名" value={newStudentName} onChange={(e) => setNewStudentName(e.target.value)} className="input-field" />
               <input type="text" placeholder="年级" value={newStudentGrade} onChange={(e) => setNewStudentGrade(e.target.value)} className="input-field" />
+              <input type="text" placeholder="学校（可选）" value={newStudentSchool} onChange={(e) => setNewStudentSchool(e.target.value)} className="input-field" />
               <div className="flex gap-2">
                 <button onClick={handleAddStudent} className="btn-primary flex-1">添加</button>
                 {students.length > 0 && <button onClick={() => setShowAddStudent(false)} className="btn-ghost">取消</button>}
@@ -196,7 +231,7 @@ export default function HomePage() {
             <div className="flex gap-2 items-center fade-in glass rounded-2xl p-2 border border-white/20">
               <select value={selectedStudent} onChange={(e) => setSelectedStudent(e.target.value)} className="input-field flex-1">
                 <option value="">选择学生...</option>
-                {students.map((s) => <option key={s.id} value={s.id}>{s.name}{s.grade ? ' (' + s.grade + ')' : ''}</option>)}
+                {students.map((s) => <option key={s.id} value={s.id}>{s.name}{s.grade ? ' (' + s.grade + ')' : ''}{s.school ? ' - ' + s.school : ''}</option>)}
               </select>
               <button onClick={() => setShowAddStudent(true)} className="btn-ghost whitespace-nowrap">+ 新增</button>
             </div>
@@ -204,7 +239,7 @@ export default function HomePage() {
         </div>
 
         {tab === 'overview' && <OverviewTab stats={stats} exams={exams} onSelectExam={(exam) => { setSelectedExam(exam); setTab('history'); }} />}
-        {tab === 'upload' && <UploadTab file={file} preview={preview} uploading={uploading} error={error} uploadSuccess={uploadSuccess} fileInputRef={fileInputRef} onFileChange={handleFileChange} onUpload={handleUpload} onClearFile={() => { setFile(null); setPreview(null); setUploadSuccess(false); }} hasStudent={!!selectedStudent} hasApiKey={!!settings.apiKey} />}
+        {tab === 'upload' && <UploadTab file={file} preview={preview} uploading={uploading} error={error} uploadSuccess={uploadSuccess} fileInputRef={fileInputRef} onFileChange={handleFileChange} onUpload={handleUpload} onClearFile={() => { setFile(null); setPreview(null); setUploadSuccess(false); }} hasStudent={!!selectedStudent} hasApiKey={!!settings.apiKey} examName={examName} setExamName={setExamName} />}
         {tab === 'history' && <HistoryTab exams={exams} selectedExam={selectedExam} onSelect={setSelectedExam} onDelete={handleDeleteExam} />}
       </main>
     </div>
@@ -268,7 +303,7 @@ function OverviewTab({ stats, exams, onSelectExam }: { stats: { totalExams: numb
                       <span className="font-medium text-gray-800 truncate">{exam.subject}</span>
                       <span className={'text-sm font-bold ' + scoreColor(pct)}>{exam.totalScore}/{exam.maxScore}</span>
                     </div>
-                    <p className="text-xs text-gray-400 mt-0.5">{exam.student?.name || '未知'} &middot; {new Date(exam.examDate).toLocaleDateString('zh-CN')}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">{exam.name !== exam.subject ? exam.subject + ' · ' : ''}{exam.student?.name || '未知'} &middot; {new Date(exam.examDate).toLocaleDateString('zh-CN')}</p>
                   </div>
                   <div className="w-16 ml-3"><ProgressBar pct={pct} size="sm" /></div>
                 </div>
@@ -289,10 +324,11 @@ function OverviewTab({ stats, exams, onSelectExam }: { stats: { totalExams: numb
   );
 }
 
-function UploadTab({ file, preview, uploading, error, uploadSuccess, fileInputRef, onFileChange, onUpload, onClearFile, hasStudent, hasApiKey }: {
+function UploadTab({ file, preview, uploading, error, uploadSuccess, fileInputRef, onFileChange, onUpload, onClearFile, hasStudent, hasApiKey, examName, setExamName }: {
   file: File | null; preview: string | null; uploading: boolean; error: string; uploadSuccess: boolean;
   fileInputRef: React.RefObject<HTMLInputElement>; onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onUpload: () => void; onClearFile: () => void; hasStudent: boolean; hasApiKey: boolean;
+  examName: string; setExamName: (v: string) => void;
 }) {
   return (
     <div className="space-y-5 fade-in">
@@ -313,6 +349,7 @@ function UploadTab({ file, preview, uploading, error, uploadSuccess, fileInputRe
       <div className="card glass glass-hover p-5 space-y-4">
         <div className="text-center">
           <div className="text-sm font-semibold text-gray-700 mb-1">📸 拍照/选择试卷照片</div>
+          <input type="text" placeholder="考试名称（可选，如：期中考试）" value={examName} onChange={(e) => setExamName(e.target.value)} className="input-field mb-3" />
           <p className="text-xs text-gray-400">照片越清晰，识别效果越好</p>
         </div>
 
@@ -360,8 +397,8 @@ function HistoryTab({ exams, selectedExam, onSelect, onDelete }: { exams: Exam[]
         <div className="gradient-header rounded-2xl p-6 text-center text-white">
           <button onClick={() => onSelect(null)} className="float-left text-white/70 hover:text-white transition-colors text-sm">← 返回</button>
           <div className="clear-both" />
-          <h2 className="text-xl font-bold tracking-tight">{selectedExam.subject}</h2>
-          <p className="text-indigo-200 text-sm mt-1">{selectedExam.student?.name || '未知'} &middot; {new Date(selectedExam.examDate).toLocaleDateString('zh-CN')}</p>
+          <h2 className="text-xl font-bold tracking-tight">{selectedExam.name || selectedExam.subject}</h2>
+          <p className="text-indigo-200 text-sm mt-1">{selectedExam.name !== selectedExam.subject ? selectedExam.subject + ' · ' : ''}{selectedExam.student?.name || '未知'} &middot; {new Date(selectedExam.examDate).toLocaleDateString('zh-CN')}</p>
           <div className="mt-4">
             <span className={scoreColor(pct) + ' font-bold text-4xl'}>{selectedExam.totalScore}</span>
             <span className="text-2xl text-white/50 font-normal">/{selectedExam.maxScore}</span>
@@ -447,7 +484,7 @@ function HistoryTab({ exams, selectedExam, onSelect, onDelete }: { exams: Exam[]
                     <h3 className="font-semibold text-gray-800 truncate">{exam.subject}</h3>
                     <span className={'text-sm font-bold ' + scoreColor(pct)}>{exam.totalScore}/{exam.maxScore}</span>
                   </div>
-                  <p className="text-xs text-gray-400 mb-2">{exam.student?.name || '未知'} &middot; {new Date(exam.examDate).toLocaleDateString('zh-CN')} &middot; 答对 {correct}/{total}</p>
+                  <p className="text-xs text-gray-400 mb-2">{exam.name !== exam.subject ? exam.subject + ' · ' : ''}{exam.student?.name || '未知'} &middot; {new Date(exam.examDate).toLocaleDateString('zh-CN')} &middot; 答对 {correct}/{total}</p>
                   <ProgressBar pct={pct} size="sm" />
                 </div>
                 <button onClick={(e) => { e.stopPropagation(); onDelete(exam.id); }} className="text-gray-300 hover:text-red-500 text-lg ml-3 mt-0.5 transition-colors leading-none px-1">✕</button>

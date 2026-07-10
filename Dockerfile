@@ -15,6 +15,9 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# Install openssl for Prisma engine to work on Alpine
+RUN apk add --no-cache openssl
+
 RUN npx prisma generate
 RUN npm run build
 
@@ -24,6 +27,9 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+
+# Install openssl for Prisma runtime
+RUN apk add --no-cache openssl
 
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
