@@ -1,5 +1,4 @@
 # Dockerfile for production deployment
-# Builds for Linux x64 (glibc/musl)
 FROM node:20-alpine AS base
 
 # Install dependencies only when needed
@@ -31,9 +30,8 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # Install openssl for Prisma runtime
 RUN apk add --no-cache openssl
 
-# Install prisma CLI for migrations
-COPY --from=builder /app/node_modules/.bin/prisma /usr/local/bin/prisma
-COPY --from=builder /app/node_modules/@prisma /usr/local/lib/node_modules/@prisma
+# Install prisma CLI for database migrations
+RUN npm install -g prisma@5.22.0
 
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
