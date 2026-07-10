@@ -1,12 +1,13 @@
-﻿# Dockerfile for production deployment
+# Dockerfile for production deployment
+# Builds for Linux x64 (glibc/musl)
 FROM node:20-alpine AS base
 
 # Install dependencies only when needed
 FROM base AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci
+COPY package.json ./
+RUN npm install --include=optional
 
 # Rebuild the source code only when needed
 FROM base AS builder
@@ -36,6 +37,6 @@ USER nextjs
 EXPOSE 3000
 
 ENV PORT=3000
-ENV HOSTNAME=\"0.0.0.0\"
+ENV HOSTNAME="0.0.0.0"
 
-CMD [\"node\", \"server.js\"]
+CMD ["node", "server.js"]
