@@ -3,7 +3,7 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: '成绩记录',
-  description: 'AI 智能分析试卷错题与成绩追踪',
+  description: 'AI 智能分析试卷错题与成绩记录',
 };
 
 export const viewport: Viewport = {
@@ -15,7 +15,7 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="zh-CN">
-      <body className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-indigo-50/30 antialiased">{children}</body>
+      <body>{children}</body>
     </html>
   );
 }

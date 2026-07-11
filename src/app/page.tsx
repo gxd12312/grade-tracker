@@ -8,7 +8,6 @@ interface Student { id: string; name: string; grade?: string | null; school?: st
 interface Question { id: string; number: string; content?: string | null; score: number; maxScore: number; isCorrect: boolean; knowledgePoint?: string | null; suggestion?: string | null; }
 interface Exam { id: string; name: string; subject: string; totalScore: number; maxScore: number; examDate: string; semester?: string | null; analysis?: string | null; rawResponse?: string | null; student: { name: string; grade?: string | null; school?: string | null }; questions: Question[]; }
 interface Settings { apiKey: string; baseURL: string; model: string; }
-type Tab = 'overview' | 'upload' | 'history';
 
 const DEFAULT_SETTINGS: Settings = { apiKey: '', baseURL: '', model: 'gpt-4o' };
 
@@ -17,482 +16,498 @@ function loadSettings(): Settings {
   return DEFAULT_SETTINGS;
 }
 
-function scoreColor(pct: number) {
-  if (pct >= 80) return 'text-emerald-600';
-  if (pct >= 60) return 'text-amber-500';
-  return 'text-red-500';
-}
+function pct(num: number, max: number) { return max > 0 ? Math.round((num / max) * 100) : 0; }
+function color(v: number) { return v >= 80 ? '#34c759' : v >= 60 ? '#ff9f0a' : '#ff3b30'; }
+function prog(v: number) { return v >= 80 ? 'bg-green' : v >= 60 ? 'bg-amber' : 'bg-red'; }
 
-function progressClass(pct: number) {
-  if (pct >= 80) return 'progress-good';
-  if (pct >= 60) return 'progress-medium';
-  return 'progress-low';
-}
-
-function ProgressBar({ pct, size = 'md' }: { pct: number; size?: 'sm' | 'md' | 'lg' }) {
-  const h = size === 'lg' ? 'h-3.5' : size === 'sm' ? 'h-1.5' : 'h-2.5';
-  return (
-    <div className={'progress-track ' + h}>
-      <div className={'progress-fill ' + progressClass(pct)} style={{ width: pct + '%' }} />
-    </div>
-  );
-}
-
-export default function HomePage() {
-  const [tab, setTab] = useState<Tab>('overview');
-  const [students, setStudents] = useState<Student[]>([]);
-  const [exams, setExams] = useState<Exam[]>([]);
-  const [selectedStudent, setSelectedStudent] = useState('');
+export default function Home() {
+  const [tab, setTab] = useState<'overview' | 'upload' | 'history'>('overview');
+  const [students, setStudents] = useState<Student[]>([]);  const [exams, setExams] = useState<Exam[]>([]);
+  const [selStudent, setSelStudent] = useState('');
   const [showAddStudent, setShowAddStudent] = useState(false);
-  const [newStudentName, setNewStudentName] = useState('');
-  const [newStudentGrade, setNewStudentGrade] = useState('');
-  const [newStudentSchool, setNewStudentSchool] = useState('');
+  const [newName, setNewName] = useState('');
+  const [newGrade, setNewGrade] = useState('');  const [newSchool, setNewSchool] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
-  const [selectedExam, setSelectedExam] = useState<Exam | null>(null);
-  const [stats, setStats] = useState({ totalExams: 0, avgScore: 0, totalMistakes: 0 });
+  const [selExam, setSelExam] = useState<Exam | null>(null);
+  const [stats, setStats] = useState({ total: 0, avg: 0, mistakes: 0 });
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
-  const [sitePassword, setSitePassword] = useState('');
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [sitePw, setSitePw] = useState('');
+  const [authed, setAuthed] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [uploadSuccess, setUploadSuccess] = useState(false);
-  const [examName, setExamName] = useState('');
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadOK, setUploadOK] = useState(false);
+  const [examName, setExamName] = useState('');  const fileRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { setSettings(loadSettings()); setSitePassword(localStorage.getItem('site_password') || ''); }, []);
+  useEffect(() => {
+    setSettings(loadSettings());    setSitePw(localStorage.getItem('site_password') || '');
+  }, []);
 
-  const saveSettings = (s: Settings) => { setSettings(s); localStorage.setItem('ai_settings', JSON.stringify(s)); };
-
-  // Get auth headers for API calls
-  const getAuthHeaders = (): Record<string, string> => {
-    const headers: Record<string, string> = {};
-    const sp = localStorage.getItem('site_password');
-    if (sp) {
-      headers['x-site-auth'] = sp;
-    }
-    return headers;
+  const authH = (): Record<string, string> => {
+    const h: Record<string, string> = {};    const sp = localStorage.getItem('site_password');
+    if (sp) h['x-site-auth'] = sp;
+    return h;
   };
 
-  // Handle API errors (especially 401)
-  const handleApiError = async (res: Response) => {
-    if (res.status === 401) {
-      setIsAuthenticated(false);
-      setError('未授权：请在设置中输入访问密码');
-      return true;
-    }
+  const apiErr = async (r: Response) => {
+    if (r.status === 401) { setAuthed(false); setError('链被授权，请在设置中设置密码'); return true; }
     return false;
   };
 
-  const loadData = useCallback(async () => {
+  const load = useCallback(async () => {
     try {
-      const authHeaders = getAuthHeaders();
-      const [sRes, eRes] = await Promise.all([fetch('/api/students', { headers: authHeaders }), fetch('/api/exams', { headers: authHeaders })]);
-      if (await handleApiError(sRes) || await handleApiError(eRes)) return;
-      const sData = await sRes.json(); setStudents(sData);
-      const eData = await eRes.json(); setExams(eData);
-      if (eData.length > 0) {
-        const total = eData.reduce((sum: number, e: Exam) => sum + e.totalScore, 0);
-        const maxTotal = eData.reduce((sum: number, e: Exam) => sum + e.maxScore, 0);
-        const mistakes = eData.reduce((sum: number, e: Exam) => sum + e.questions.filter((q: Question) => !q.isCorrect).length, 0);
-        setStats({ totalExams: eData.length, avgScore: maxTotal > 0 ? Math.round((total / maxTotal) * 100) : 0, totalMistakes: mistakes });
+      const [sr, er] = await Promise.all([fetch('/api/students', { headers: authH() }), fetch('/api/exams', { headers: authH() })]);
+      if (await apiErr(sr) || await apiErr(er)) return;
+      const sd = await sr.json(); setStudents(sd);
+      const ed = await er.json(); setExams(ed);
+      if (ed.length > 0) {
+        const t = ed.reduce((s: number, e: Exam) => s + e.totalScore, 0);        const m = ed.reduce((s: number, e: Exam) => s + e.maxScore, 0);
+        const mk = ed.reduce((s: number, e: Exam) => s + e.questions.filter(q => !q.isCorrect).length, 0);
+        setStats({ total: ed.length, avg: m > 0 ? Math.round((t / m) * 100) : 0, mistakes: mk });
       }
-    } catch (err) { console.error('Failed to load data:', err); }
+    } catch (e) { console.error('load', e); }
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { load(); }, [load]);
 
-  const handleAddStudent = async () => {
-    if (!newStudentName.trim()) return;
+  const addStudent = async () => {
+    if (!newName.trim()) return;
     try {
-      const res = await fetch('/api/students', { method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, body: JSON.stringify({ name: newStudentName, grade: newStudentGrade, school: newStudentSchool }) });
-      if (await handleApiError(res)) return;
-      const student = await res.json();
-      if (student.id) { setStudents([student, ...students]); setSelectedStudent(student.id); setNewStudentName(''); setNewStudentGrade(''); setNewStudentSchool(''); setShowAddStudent(false); }
-    } catch { setError('添加学生失败'); }
+      const r = await fetch('/api/students', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authH() }, body: JSON.stringify({ name: newName, grade: newGrade, school: newSchool }) });
+      if (await apiErr(r)) return;
+      const s = await r.json();
+      if (s.id) { setStudents([s, ...students]); setSelStudent(s.id); setNewName(''); setNewGrade(''); setNewSchool(''); setShowAddStudent(false); }
+    } catch { setError('添加失败'); }
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0]; if (f) { setFile(f); setPreview(URL.createObjectURL(f)); setError(''); setUploadSuccess(false); }
+  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {    const f = e.target.files?.[0]; if (f) { setFile(f); setPreview(URL.createObjectURL(f)); setError(''); setUploadOK(false); }
   };
 
-  const handleUpload = async () => {
-    if (!file || !selectedStudent) { setError('请选择学生和试卷图片'); return; }
-    if (!settings.apiKey) { setError('请先在右上角设置中填写 API Key'); return; }
-    setUploading(true); setError(''); setUploadSuccess(false);
+  const doUpload = async () => {
+    if (!file || !selStudent) { setError('请选择学生和试卷'); return; }
+    if (!settings.apiKey) { setError('请先在右上角设置 API Key'); return; }
+    setUploading(true); setError(''); setUploadOK(false);
     try {
-      const formData = new FormData();
-      formData.append('file', file); formData.append('studentId', selectedStudent); formData.append('name', examName);
-      const headers: Record<string, string> = {};
-      if (settings.apiKey) headers['x-api-key'] = settings.apiKey;
-      if (settings.baseURL) headers['x-base-url'] = settings.baseURL;
-      if (settings.model) headers['x-model'] = settings.model;
-      const res = await fetch('/api/parse', { method: 'POST', body: formData, headers: { ...headers, ...getAuthHeaders() } });
-      if (await handleApiError(res)) { setUploading(false); return; }
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || '解析失败');
-      setFile(null); setPreview(null); setUploadSuccess(true); setExamName('');
-      await loadData();
-    } catch (err: any) {
-      setError(err.message || '上传解析失败，请重试');
-    } finally {
-      setUploading(false);
-    }
+      const fd = new FormData();      fd.append('file', file); fd.append('studentId', selStudent); fd.append('name', examName);
+      const h: Record<string, string> = {};
+      if (settings.apiKey) h['x-api-key'] = settings.apiKey;
+      if (settings.baseURL) h['x-base-url'] = settings.baseURL;
+      if (settings.model) h['x-model'] = settings.model;      const r = await fetch('/api/parse', { method: 'POST', body: fd, headers: { ...h, ...authH() } });
+      if (await apiErr(r)) { setUploading(false); return; }
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || '解析失败');
+      setFile(null); setPreview(null); setUploadOK(true); setExamName('');      await load();
+    } catch (e: any) { setError(e.message || '上传失败'); }    finally { setUploading(false); }
   };
 
-  const handleDeleteExam = async (id: string) => {
-    if (!confirm('确定要删除这条考试记录吗？')) return;
-    try {
-      const delRes = await fetch('/api/exams/' + id, { method: 'DELETE', headers: getAuthHeaders() });
-      if (await handleApiError(delRes)) return;
-      if (selectedExam?.id === id) setSelectedExam(null);
-      await loadData();
-    } catch { setError('删除失败'); }
+  const delExam = async (id: string) => {
+    if (!confirm('确定删除？')) return;
+    try { const r = await fetch('/api/exams/' + id, { method: 'DELETE', headers: authH() }); if (await apiErr(r)) return; if (selExam?.id === id) setSelExam(null); await load(); }
+    catch { setError('删除失败'); }
   };
+
+  const saveSettings = () => { localStorage.setItem('ai_settings', JSON.stringify(settings)); if (sitePw) localStorage.setItem('site_password', sitePw); setShowSettings(false); };
 
   return (
-    <div className="min-h-screen pb-8 relative">
-      <header className="gradient-header text-white px-4 pt-6 pb-8">
-        <div className="max-w-2xl mx-auto">
-          <div className="flex items-center justify-between mb-5">
-            <div>
-              <h1 className="text-xl font-bold tracking-tight">成绩记录</h1>
-              <p className="text-indigo-200 text-sm mt-0.5">AI 智能分析试卷错题</p>
-            </div>
-            <button onClick={() => setShowSettings(!showSettings)} className="w-10 h-10 rounded-full bg-white/15 flex items-center justify-center hover:bg-white/25 transition-colors">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
-            </button>
-          </div>
-
-          {showSettings && (
-            <div className="rounded-2xl bg-white/10 backdrop-blur-lg border border-white/20 p-5 space-y-4 fade-in">
-              <div className="flex items-center justify-between">
-                <h2 className="font-semibold text-white flex items-center gap-2">
-                  <span className="text-base">⚙️</span>
-                  <span>AI 设置</span>
-                </h2>
-                <button onClick={() => setShowSettings(false)} className="text-xs text-white/60 hover:text-white/90 transition-colors">关闭</button>
-              </div>
-              <p className="text-xs text-indigo-200 -mt-2">设置后自动保存在浏览器本地</p>
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-xs font-medium text-indigo-100 mb-1.5">API Key <span className="text-red-300">*</span></label>
-                  <input type="password" placeholder="sk-..." value={settings.apiKey} onChange={(e) => setSettings({ ...settings, apiKey: e.target.value })} className="w-full rounded-xl bg-white/15 border border-white/20 px-4 py-2.5 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-white/30 transition" />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-indigo-100 mb-1.5">Base URL</label>
-                    <input type="text" placeholder="https://api.deepseek.com/v1" value={settings.baseURL} onChange={(e) => setSettings({ ...settings, baseURL: e.target.value })} className="w-full rounded-xl bg-white/15 border border-white/20 px-4 py-2.5 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-white/30 transition" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-indigo-100 mb-1.5">Model</label>
-                    <input type="text" placeholder="gpt-4o" value={settings.model} onChange={(e) => setSettings({ ...settings, model: e.target.value })} className="w-full rounded-xl bg-white/15 border border-white/20 px-4 py-2.5 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-white/30 transition" />
-                  </div>
-                </div>
-                <div className="border-t border-white/10 pt-3 mt-3">
-                  <label className="block text-xs font-medium text-indigo-100 mb-1.5">网站访问密码（可选）</label>
-                  <input type="password" placeholder="设置密码后，API 访问需要验证" value={sitePassword} onChange={(e) => setSitePassword(e.target.value)} className="w-full rounded-xl bg-white/15 border border-white/20 px-4 py-2.5 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-white/30 transition" />
-                  <p className="text-xs text-indigo-200 mt-1">设置后请妥善保管，所有写操作需要此密码</p>
-                </div>
-                <button onClick={() => { saveSettings(settings); localStorage.setItem('site_password', sitePassword); setShowSettings(false); }} className="w-full rounded-xl bg-white text-indigo-700 py-2.5 text-sm font-semibold hover:bg-white/90 transition-colors">保存设置</button>
-              </div>
-            </div>
-          )}
-        </div>
-      </header>
-
-      <main className="max-w-2xl mx-auto px-4 -mt-3">
-        <div className="tab-bar mb-5">
-          {([
-            { id: 'overview' as Tab, label: '概览' },
-            { id: 'upload' as Tab, label: '上传' },
-            { id: 'history' as Tab, label: '记录' },
-          ]).map((t) => (
-            <button key={t.id} onClick={() => { setTab(t.id); setSelectedExam(null); }} className={'tab-btn ' + (tab === t.id ? 'tab-active' : 'tab-inactive')}>
-              {t.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="mb-5">
-          {students.length === 0 || showAddStudent ? (
-            <div className="card glass glass-hover p-4 space-y-3 fade-in">
-              <p className="text-sm font-semibold text-gray-700">添加学生</p>
-              <input type="text" placeholder="姓名" value={newStudentName} onChange={(e) => setNewStudentName(e.target.value)} className="input-field" />
-              <input type="text" placeholder="年级" value={newStudentGrade} onChange={(e) => setNewStudentGrade(e.target.value)} className="input-field" />
-              <input type="text" placeholder="学校（可选）" value={newStudentSchool} onChange={(e) => setNewStudentSchool(e.target.value)} className="input-field" />
-              <div className="flex gap-2">
-                <button onClick={handleAddStudent} className="btn-primary flex-1">添加</button>
-                {students.length > 0 && <button onClick={() => setShowAddStudent(false)} className="btn-ghost">取消</button>}
-              </div>
-            </div>
-          ) : (
-            <div className="flex gap-2 items-center fade-in glass rounded-2xl p-2 border border-white/20">
-              <select value={selectedStudent} onChange={(e) => setSelectedStudent(e.target.value)} className="input-field flex-1">
-                <option value="">选择学生...</option>
-                {students.map((s) => <option key={s.id} value={s.id}>{s.name}{s.grade ? ' (' + s.grade + ')' : ''}{s.school ? ' - ' + s.school : ''}</option>)}
-              </select>
-              <button onClick={() => setShowAddStudent(true)} className="btn-ghost whitespace-nowrap">+ 新增</button>
-            </div>
-          )}
-        </div>
-
-        {tab === 'overview' && <OverviewTab stats={stats} exams={exams} onSelectExam={(exam) => { setSelectedExam(exam); setTab('history'); }} />}
-        {tab === 'upload' && <UploadTab file={file} preview={preview} uploading={uploading} error={error} uploadSuccess={uploadSuccess} fileInputRef={fileInputRef} onFileChange={handleFileChange} onUpload={handleUpload} onClearFile={() => { setFile(null); setPreview(null); setUploadSuccess(false); }} hasStudent={!!selectedStudent} hasApiKey={!!settings.apiKey} examName={examName} setExamName={setExamName} />}
-        {tab === 'history' && <HistoryTab exams={exams} selectedExam={selectedExam} onSelect={setSelectedExam} onDelete={handleDeleteExam} />}
-      </main>
-    </div>
-  );
-}
-
-function OverviewTab({ stats, exams, onSelectExam }: { stats: { totalExams: number; avgScore: number; totalMistakes: number }; exams: Exam[]; onSelectExam: (exam: Exam) => void }) {
-  const recent = exams.slice(0, 5);
-  const subjectMap = new Map<string, number[]>();
-  exams.forEach(e => {
-    const pct = e.maxScore > 0 ? Math.round((e.totalScore / e.maxScore) * 100) : 0;
-    if (!subjectMap.has(e.subject)) subjectMap.set(e.subject, []);
-    subjectMap.get(e.subject)!.push(pct);
-  });
-
-  return (
-    <div className="space-y-5 fade-in">
-      <div className="grid grid-cols-3 gap-3">
-        <div className="stat-card glass-hover">
-          <div className="text-2xl font-bold text-indigo-600">{stats.totalExams}</div>
-          <div className="text-xs text-gray-500 mt-1">考试总数</div>
-        </div>
-        <div className="stat-card glass-hover">
-          <div className="text-2xl font-bold text-indigo-600">{stats.avgScore}%</div>
-          <div className="text-xs text-gray-500 mt-1">平均得分</div>
-        </div>
-        <div className="stat-card glass-hover">
-          <div className="text-2xl font-bold text-indigo-600">{stats.totalMistakes}</div>
-          <div className="text-xs text-gray-500 mt-1">错题总数</div>
-        </div>
-      </div>
-
-      {subjectMap.size > 0 && (
-        <div className="card glass glass-hover p-4"><h3 className="section-title mb-3">📊 各科平均分</h3>
-          <div className="space-y-3">
-            {Array.from(subjectMap.entries()).map(([subject, scores]) => {
-              const avg = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
-              return (
-                <div key={subject}>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-medium text-gray-700">{subject}</span>
-                    <span className={'text-xs font-semibold ' + scoreColor(avg)}>{avg}%</span>
-                  </div>
-                  <ProgressBar pct={avg} size="sm" />
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {recent.length > 0 && (
-        <div className="card glass glass-hover p-4"><h3 className="section-title mb-3">📝 最近考试</h3>
-          <div className="space-y-1">
-            {recent.map((exam) => {
-              const pct = exam.maxScore > 0 ? Math.round((exam.totalScore / exam.maxScore) * 100) : 0;
-              return (
-                <div key={exam.id} onClick={() => onSelectExam(exam)} className="flex items-center justify-between py-3 px-3 rounded-xl hover:bg-gray-50 cursor-pointer transition-colors">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-gray-800 truncate">{exam.subject}</span>
-                      <span className={'text-sm font-bold ' + scoreColor(pct)}>{exam.totalScore}/{exam.maxScore}</span>
-                    </div>
-                    <p className="text-xs text-gray-400 mt-0.5">{exam.name !== exam.subject ? exam.subject + ' · ' : ''}{exam.student?.name || '未知'} &middot; {new Date(exam.examDate).toLocaleDateString('zh-CN')}</p>
-                  </div>
-                  <div className="w-16 ml-3"><ProgressBar pct={pct} size="sm" /></div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {stats.totalExams === 0 && (
-        <div className="rounded-2xl border-2 border-dashed border-gray-200 bg-white/50 p-12 text-center">
-          <div className="text-4xl mb-3">📋</div>
-          <p className="text-gray-500 font-medium">还没有考试记录</p>
-          <p className="text-gray-400 text-sm mt-1">点击上方「上传」标签开始</p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function UploadTab({ file, preview, uploading, error, uploadSuccess, fileInputRef, onFileChange, onUpload, onClearFile, hasStudent, hasApiKey, examName, setExamName }: {
-  file: File | null; preview: string | null; uploading: boolean; error: string; uploadSuccess: boolean;
-  fileInputRef: React.RefObject<HTMLInputElement>; onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  onUpload: () => void; onClearFile: () => void; hasStudent: boolean; hasApiKey: boolean;
-  examName: string; setExamName: (v: string) => void;
-}) {
-  return (
-    <div className="space-y-5 fade-in">
-      {!hasApiKey && (
-        <div className="rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800 flex items-center gap-2">
-          <span className="text-base">⚠️</span>
-          <span>请先在右上角设置中填写 API Key</span>
-        </div>
-      )}
-
-      {uploadSuccess && (
-        <div className="rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm text-emerald-800 flex items-center gap-2">
-          <span className="text-base">✅</span>
-          <span>分析完成！请在「记录」标签查看详情</span>
-        </div>
-      )}
-
-      <div className="card glass glass-hover p-5 space-y-4">
-        <div className="text-center">
-          <div className="text-sm font-semibold text-gray-700 mb-1">📸 拍照/选择试卷照片</div>
-          <input type="text" placeholder="考试名称（可选，如：期中考试）" value={examName} onChange={(e) => setExamName(e.target.value)} className="input-field mb-3" />
-          <p className="text-xs text-gray-400">照片越清晰，识别效果越好</p>
-        </div>
-
-        <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={onFileChange} className="hidden" />
-
-        {preview ? (
-          <div className="relative rounded-2xl overflow-hidden bg-gray-100">
-            <img src={preview} alt="Preview" className="w-full max-h-80 object-contain" />
-            <button onClick={onClearFile} className="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/50 flex items-center justify-center text-white hover:bg-black/70 transition-colors text-sm">✕</button>
-          </div>
-        ) : (
-          <button onClick={() => fileInputRef.current?.click()} className="w-full rounded-2xl border-2 border-dashed border-gray-200 p-12 text-center hover:border-indigo-300 hover:bg-indigo-50/30 transition-all cursor-pointer group">
-            <div className="text-4xl mb-3 group-hover:scale-110 transition-transform inline-block">📷</div>
-            <p className="text-sm text-gray-500 font-medium">点击拍照或选择图片</p>
+    <>      {/* Global Nav */}
+      <nav className="nav-global">
+        <div className="nav-inner">          <span className="nav-brand">{students.length > 0 && selStudent ? students.find(s => s.id === selStudent)?.name + ' 的成绩记录' : '成绩记录'}</span>          <button onClick={() => setShowSettings(!showSettings)} className="icon-btn">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#a1a1a6" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
           </button>
-        )}
+        </div>
+      </nav>
 
-        <button onClick={onUpload} disabled={!file || uploading || !hasStudent} className="btn-primary w-full">
-          {uploading ? (
-            <span className="flex items-center gap-2">
-              <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              正在分析中...
-            </span>
-          ) : (
-            <span>开始分析</span>
-          )}
-        </button>
-
-        {error && (
-          <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
-            {error}
+      {/* Settings */}      {showSettings && (
+        <div className="settings-panel fade-in">
+          <div className="container-sm">
+            <h2 className="display-lg" style={{ fontSize: 24, marginBottom: 24 }}>设置</h2>
+            <div style={{ display: 'grid', gap: 20 }}>
+              <div>
+                <label className="form-label">API Key <span style={{ color: '#ff3b30' }}>*</span></label>
+                <input type="password" placeholder="sk-..." value={settings.apiKey} onChange={e => setSettings({ ...settings, apiKey: e.target.value })} className="input" />
+              </div>
+              <div className="grid-2">
+                <div>
+                  <label className="form-label">Base URL</label>
+                  <input type="text" placeholder="https://api.deepseek.com/v1" value={settings.baseURL} onChange={e => setSettings({ ...settings, baseURL: e.target.value })} className="input" />
+                </div>
+                <div>
+                  <label className="form-label">Model</label>
+                  <input type="text" placeholder="gpt-4o" value={settings.model} onChange={e => setSettings({ ...settings, model: e.target.value })} className="input" />                </div>
+              </div>
+              <div className="divider-top">
+                <label className="form-label">访问密码（可选）</label>
+                <input type="password" placeholder="留空则无需密码" value={sitePw} onChange={e => setSitePw(e.target.value)} className="input" />
+                <p className="fine-print" style={{ marginTop: 6 }}>设置后所有写操作需要验证</p>
+              </div>
+              <div style={{ display: 'flex', gap: 12 }}>
+                <button onClick={saveSettings} className="btn-blue">保存</button>
+                <button onClick={() => setShowSettings(false)} className="btn-secondary">取消</button>              </div>
+            </div>
           </div>
-        )}
+        </div>
+      )}
+
+      {/* Mobile-friendly nav wrapper */}
+      <div className="content-wrapper">
+        {/* Hero - parchment */}
+        <section className="tile tile-parchment">
+          <div className="container-sm" style={{ textAlign: 'center' }}>
+            <StudentSwitcher students={students} selId={selStudent} onSelect={setSelStudent} onAdd={() => setShowAddStudent(true)} />
+            {showAddStudent && (
+              <div className="card-store fade-in" style={{ marginTop: 16, display: 'grid', gap: 12, textAlign: 'left' }}>
+                <input placeholder="姓名" value={newName} onChange={e => setNewName(e.target.value)} className="input" />
+                <div className="grid-2">
+                  <input placeholder="年级" value={newGrade} onChange={e => setNewGrade(e.target.value)} className="input" />
+                  <input placeholder="学校（可选）" value={newSchool} onChange={e => setNewSchool(e.target.value)} className="input" />
+                </div>
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <button onClick={addStudent} className="btn-blue">确认添加</button>
+                  <button onClick={() => setShowAddStudent(false)} className="btn-secondary">取消</button>
+                </div>
+              </div>
+            )}
+            <Insights exams={exams} stats={stats} />          </div>
+        </section>
+
+        {/* Sub-nav */}
+        <nav className="subnav-sticky">
+          <div className="container-sm">
+            <div className="tab-bar">
+              {(['overview', 'upload', 'history'] as const).map(t => (
+                <button key={t} onClick={() => { setTab(t); setSelExam(null); }}                  className={'tab-item ' + (tab === t ? 'active' : '')}>
+                  {t === 'overview' ? '总览' : t === 'upload' ? '上传' : '记录'}
+                </button>
+              ))}
+            </div>
+          </div>
+        </nav>        {/* Tab Content */}
+        {tab === 'overview' && <OverviewTab stats={stats} exams={exams} onPick={e => { setSelExam(e); setTab('history'); }} />}
+        {tab === 'upload' && <UploadTab file={file} preview={preview} uploading={uploading} error={error} hasStudent={!!selStudent} hasKey={!!settings.apiKey} uploadOK={uploadOK} examName={examName} setExamName={setExamName} fileRef={fileRef} onFile={onFile} onUpload={doUpload} onClear={() => { setFile(null); setPreview(null); setUploadOK(false); }} />}
+        {tab === 'history' && <HistoryTab exams={exams} selExam={selExam} onSelect={setSelExam} onDelete={delExam} />}
       </div>
-    </div>
+    </>
   );
 }
 
-function HistoryTab({ exams, selectedExam, onSelect, onDelete }: { exams: Exam[]; selectedExam: Exam | null; onSelect: (exam: Exam | null) => void; onDelete: (id: string) => void }) {
-  if (selectedExam) {
-    const mistakes = selectedExam.questions.filter((q) => !q.isCorrect);
-    const pct = selectedExam.maxScore > 0 ? Math.round((selectedExam.totalScore / selectedExam.maxScore) * 100) : 0;
-    return (
-      <div className="space-y-4 slide-up">
-        <div className="gradient-header rounded-2xl p-6 text-center text-white">
-          <button onClick={() => onSelect(null)} className="float-left text-white/70 hover:text-white transition-colors text-sm">← 返回</button>
-          <div className="clear-both" />
-          <h2 className="text-xl font-bold tracking-tight">{selectedExam.name || selectedExam.subject}</h2>
-          <p className="text-indigo-200 text-sm mt-1">{selectedExam.name !== selectedExam.subject ? selectedExam.subject + ' · ' : ''}{selectedExam.student?.name || '未知'} &middot; {new Date(selectedExam.examDate).toLocaleDateString('zh-CN')}</p>
-          <div className="mt-4">
-            <span className={scoreColor(pct) + ' font-bold text-4xl'}>{selectedExam.totalScore}</span>
-            <span className="text-2xl text-white/50 font-normal">/{selectedExam.maxScore}</span>
-          </div>
-          <p className="text-sm text-indigo-200 mt-2">正确率 {pct}% &middot; 错题 {mistakes.length} 道</p>
-          <div className="max-w-xs mx-auto mt-4"><ProgressBar pct={pct} size="lg" /></div>
-        </div>
-
-        {selectedExam.analysis && (
-          <div className="rounded-2xl border border-indigo-100 bg-gradient-to-br from-indigo-50/80 to-white p-5 slide-up">
-            <h3 className="font-semibold text-indigo-900 mb-2 flex items-center gap-2 text-sm">
-              💡 分析建议
-            </h3>
-            <p className="text-sm text-indigo-800 whitespace-pre-line leading-relaxed">{selectedExam.analysis}</p>
-          </div>
-        )}
-
-        {mistakes.length > 0 && (
-          <div className="card glass glass-hover p-5 space-y-3 slide-up">
-            <h3 className="font-semibold text-gray-800 flex items-center gap-2 text-sm">
-              <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />
-              错题 ({mistakes.length})
-            </h3>
-            {mistakes.map((q) => (
-              <div key={q.id} className="rounded-xl border border-red-100 bg-red-50/60 p-4">
-                <div className="flex items-center gap-2 mb-1.5">
-                  <span className="badge-wrong">第 {q.number} 题</span>
-                  <span className="text-xs text-red-600 font-semibold">{q.score}/{q.maxScore}</span>
-                </div>
-                {q.content && <p className="text-sm text-gray-700">{q.content}</p>}
-                {q.knowledgePoint && <p className="mt-1.5 text-xs font-medium text-red-700 bg-red-100/60 inline-block px-2 py-0.5 rounded-full">📌 {q.knowledgePoint}</p>}
-                {q.suggestion && <p className="mt-2 text-xs text-gray-600 leading-relaxed">💡 {q.suggestion}</p>}
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="card glass glass-hover p-5 space-y-2 slide-up">
-          <h3 className="font-semibold text-gray-800 flex items-center gap-2 text-sm mb-3">
-            <span className="w-1.5 h-1.5 rounded-full bg-gray-400 inline-block" />
-            全部题目
-          </h3>
-          {selectedExam.questions.map((q) => (
-            <div key={q.id} className={'flex items-center justify-between rounded-xl px-4 py-2.5 text-sm ' + (q.isCorrect ? 'bg-emerald-50/60' : 'bg-red-50/60')}>
-              <div className="flex items-center gap-2.5">
-                <span className={'w-2 h-2 rounded-full ' + (q.isCorrect ? 'bg-emerald-500' : 'bg-red-500')} />
-                <span className="font-medium text-gray-700">第 {q.number} 题</span>
-                {q.content && <span className="text-gray-400 truncate max-w-[200px]">{q.content}</span>}
-              </div>
-              <span className={'text-xs font-semibold ' + (q.isCorrect ? 'text-emerald-600' : 'text-red-600')}>{q.score}/{q.maxScore}</span>
-            </div>
-          ))}
-        </div>
-
-        {selectedExam.rawResponse && (
-          <details className="rounded-2xl border border-gray-200 bg-gray-50 p-4 slide-up">
-            <summary className="cursor-pointer text-sm font-medium text-gray-500 select-none hover:text-gray-700 transition-colors">查看 AI 原始响应</summary>
-            <pre className="mt-3 rounded-xl bg-gray-900 p-4 text-xs text-green-400 whitespace-pre-wrap max-h-60 overflow-auto custom-scrollbar">{selectedExam.rawResponse}</pre>
-          </details>
-        )}
+/* ================================================================
+   Student Switcher
+   ================================================================ */
+function StudentSwitcher({ students, selId, onSelect, onAdd }: { students: Student[]; selId: string; onSelect: (id: string) => void; onAdd: () => void }) {
+  if (students.length === 0) {    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
+        <span className="display-lg" style={{ fontSize: 32 }}>还没有学生</span>
+        <span className="caption">添加第一个孩子开始追踪学习进度</span>
+        <button onClick={onAdd} className="btn-blue">+ 添加学生</button>
       </div>
     );
   }
+  return (    <div className="student-switch">
+      <select value={selId} onChange={e => onSelect(e.target.value)} className="student-select">
+        <option value="">选择学生...</option>
+        {students.map(s => <option key={s.id} value={s.id}>{s.name}{s.grade ? ` — ${s.grade}` : ''}{s.school ? ` · ${s.school}` : ''}</option>)}
+      </select>
+      <button onClick={onAdd} className="btn-ghost">+ 新增</button>
+    </div>  );
+}
+
+/* ================================================================
+   Insights - trend + summary line
+   ================================================================ */
+function Insights({ exams, stats }: { exams: Exam[]; stats: { total: number; avg: number; mistakes: number } }) {
+  if (stats.total === 0) {
+    return (
+      <div style={{ marginTop: 32 }}>
+        <span className="display-lg" style={{ fontSize: 32, marginBottom: 12, display: 'block' }}>还没有考试记录</span>
+        <span className="caption">上传第一份试卷，AI 将自动分析并告诉你孩子的学习情况</span>
+      </div>    );
+  }
+  const recentExams = exams.slice(0, 6);
+  const trendData = recentExams.map(e => pct(e.totalScore, e.maxScore)).reverse();
+  const maxVal = Math.max(...trendData, 100);  const minVal = Math.min(...trendData, 0);  const range = maxVal - minVal || 1;
+  const w = 280;  const h = 48;
+  const points = trendData.map((v, i) => {
+    const x = (i / Math.max(1, trendData.length - 1)) * w;
+    const y = h - ((v - minVal) / range) * h;    return `${x},${y}`;
+  }).join(' ');
+
+  // One-line insight
+  let insight = '';  if (trendData.length >= 2) {    const diff = trendData[trendData.length - 1] - trendData[trendData.length - 2];
+    if (diff > 5) insight = `比上次进步了 ${diff} 分，继续保持 💪`;
+    else if (diff < -5) insight = `比上次退步了 ${Math.abs(diff)} 分，一起看看原因吧 🔍`;
+    else insight = `成绩稳定，继续保持 📊`;
+  } else {
+    insight = '已录入第一份试卷，AI 分析中...';  }
 
   return (
-    <div className="space-y-3 fade-in">
-      {exams.length === 0 ? (
-        <div className="rounded-2xl border-2 border-dashed border-gray-200 bg-white/50 p-12 text-center">
-          <div className="text-4xl mb-3">📋</div>
-          <p className="text-gray-500 font-medium">暂无考试记录</p>
-          <p className="text-gray-400 text-sm mt-1">先从上传试卷照片开始吧</p>
+    <>
+      <div style={{ marginTop: 32, marginBottom: 8 }}>
+        <span className="display-hero" style={{ fontSize: 32, display: 'block', marginBottom: 8 }}>{insight}</span>
+      </div>      {/* Mini chart */}
+      <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>        <svg width="100%" viewBox={`0 0 ${w} ${h + 8}`} style={{ maxWidth: 320, height: 'auto' }}>
+          <polyline fill="none" stroke="#0066cc" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" points={points} />
+          {trendData.map((v, i) => {            const cx = (i / Math.max(1, trendData.length - 1)) * w;
+            const cy = h - ((v - minVal) / range) * h;            return <circle key={i} cx={cx} cy={cy} r="3" fill="#0066cc" />;
+          })}
+        </svg>
+      </div>
+      <p className="caption" style={{ marginTop: 8 }}>近 {trendData.length} 次成绩趋势</p>
+    </>
+  );
+}
+
+/* ================================================================
+   OVERVIEW TAB
+   ================================================================ */
+function OverviewTab({ stats, exams, onPick }: { stats: { total: number; avg: number; mistakes: number }; exams: Exam[]; onPick: (e: Exam) => void }) {
+  const recent = exams.slice(0, 6);
+  const subjectMap = new Map<string, { scores: number[]; trend: number }>();
+  exams.forEach(e => {
+    const p = pct(e.totalScore, e.maxScore);
+    if (!subjectMap.has(e.subject)) subjectMap.set(e.subject, { scores: [], trend: 0 });
+    subjectMap.get(e.subject)!.scores.push(p);
+  });
+  // Calculate trends (compare first half vs second half)
+  subjectMap.forEach((v) => {
+    const half = Math.floor(v.scores.length / 2);    const first = v.scores.slice(0, half);
+    const second = v.scores.slice(half);
+    const avg1 = first.length ? first.reduce((a, b) => a + b, 0) / first.length : 0;    const avg2 = second.length ? second.reduce((a, b) => a + b, 0) / second.length : 0;
+    v.trend = avg2 - avg1;
+  });
+
+  return (
+    <>
+      {/* Metrics */}
+      <section className="tile tile-white" style={{ padding: '32px 24px' }}>
+        <div className="container-sm">
+          <div className="metrics-grid">
+            <Metric value={stats.total} suffix="" label="考试总数" />
+            <Metric value={stats.avg} suffix="%" label="平均得分率" />
+            <Metric value={stats.mistakes} suffix="" label="待复习错题" />
+          </div>
         </div>
-      ) : (
-        exams.map((exam, idx) => {
-          const correct = exam.questions.filter((q) => q.isCorrect).length;
-          const total = exam.questions.length;
-          const pct = exam.maxScore > 0 ? Math.round((exam.totalScore / exam.maxScore) * 100) : 0;
-          return (
-            <div key={exam.id} className="card-interactive glass glass-hover p-4 slide-up" style={{ animationDelay: idx * 50 + 'ms' }}>
-              <div className="flex items-start justify-between">
-                <div className="cursor-pointer flex-1 min-w-0" onClick={() => onSelect(exam)}>
-                  <div className="flex items-center gap-2 mb-1">
-                    <h3 className="font-semibold text-gray-800 truncate">{exam.subject}</h3>
-                    <span className={'text-sm font-bold ' + scoreColor(pct)}>{exam.totalScore}/{exam.maxScore}</span>
-                  </div>
-                  <p className="text-xs text-gray-400 mb-2">{exam.name !== exam.subject ? exam.subject + ' · ' : ''}{exam.student?.name || '未知'} &middot; {new Date(exam.examDate).toLocaleDateString('zh-CN')} &middot; 答对 {correct}/{total}</p>
-                  <ProgressBar pct={pct} size="sm" />
-                </div>
-                <button onClick={(e) => { e.stopPropagation(); onDelete(exam.id); }} className="text-gray-300 hover:text-red-500 text-lg ml-3 mt-0.5 transition-colors leading-none px-1">✕</button>
-              </div>
-            </div>
-          );
-        })
+      </section>
+
+      {/* Subject mastery */}
+      {subjectMap.size > 0 && (
+        <section className="tile tile-dark">
+          <div className="container-sm">
+            <span className="display-lg" style={{ color: '#f5f5f7', marginBottom: 32, display: 'block', textAlign: 'center' }}>各科掌握度</span>
+            <div style={{ display: 'grid', gap: 20 }}>
+              {Array.from(subjectMap.entries()).map(([subject, { scores, trend }]) => {
+                const avg = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+                return (
+                  <div key={subject}>                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <span className="body-strong" style={{ color: '#f5f5f7', fontSize: 17 }}>{subject}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span className="body-strong" style={{ color: color(avg) }}>{avg}%</span>
+                        {trend !== 0 && (
+                          <span className={'badge-pill ' + (trend > 0 ? 'badge-green' : 'badge-red')} style={{ fontSize: 11 }}>                            {trend > 0 ? '↑' : '↓'} {Math.abs(Math.round(trend))}%
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ height: 6, borderRadius: 9999, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
+                      <div style={{ height: '100%', borderRadius: 9999, background: color(avg), width: avg + '%', transition: 'width 0.6s' }} />
+                    </div>                  </div>
+                );
+              })}            </div>
+          </div>
+        </section>
       )}
+
+      {/* Recent mistakes */}
+      {recent.length > 0 && (
+        <section className="tile tile-parchment">
+          <div className="container-sm">
+            <span className="display-lg" style={{ fontSize: 28, marginBottom: 24, display: 'block', textAlign: 'center' }}>最近错题</span>
+            <div style={{ display: 'grid', gap: 2 }}>
+              {recent.map(exam => {                const mistakes = exam.questions.filter(q => !q.isCorrect);                return mistakes.slice(0, 3).map(q => (
+                  <div key={q.id} onClick={() => onPick(exam)} className="card-row" style={{ cursor: 'pointer' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>                      <span className={'dot ' + (q.isCorrect ? 'dot-green' : 'dot-red')} />
+                      <span className="body-strong">{exam.subject}</span>
+                      <span className="caption">第{q.number}题</span>                    </div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+                      {q.knowledgePoint && <span className="badge-pill badge-gray">{q.knowledgePoint}</span>}
+                      <span className="caption" style={{ color: '#ff3b30', fontWeight: 600 }}>{q.score}/{q.maxScore}</span>
+                    </div>
+                  </div>
+                ));              })}
+            </div>
+          </div>
+        </section>
+      )}    </>
+  );}
+
+function Metric({ value, suffix, label }: { value: number; suffix: string; label: string }) {
+  return (
+    <div className="metric-card">
+      <div className="metric-value">{value}<span style={{ fontSize: 17, fontWeight: 400, color: '#7a7a7a' }}>{suffix}</span></div>
+      <div style={{ fontSize: 14, color: '#7a7a7a', marginTop: 4 }}>{label}</div>
     </div>
+  );
+}
+
+/* ================================================================
+   UPLOAD TAB
+   ================================================================ */
+function UploadTab({ file, preview, uploading, error, hasStudent, hasKey, uploadOK, examName, setExamName, fileRef, onFile, onUpload, onClear }: {
+  file: File | null; preview: string | null; uploading: boolean; error: string;
+  hasStudent: boolean; hasKey: boolean; uploadOK: boolean;
+  examName: string; setExamName: (v: string) => void;
+  fileRef: React.RefObject<HTMLInputElement>; onFile: (e: any) => void; onUpload: () => void; onClear: () => void;
+}) {  return (
+    <section className="tile tile-parchment">
+      <div className="container-sm">
+        {!hasKey && (
+          <div className="card-store fade-in" style={{ marginBottom: 20, background: '#fff8e1', borderColor: '#ffe082' }}>
+            <span className="body-strong" style={{ color: '#f57c00', fontSize: 14 }}>⚠ 请先在右上角设置 API Key</span>
+          </div>
+        )}
+        {uploadOK && (
+          <div className="card-store fade-in" style={{ marginBottom: 20, background: '#f0fdf4', borderColor: '#bbf7d0' }}>
+            <span className="body-strong" style={{ color: '#16a34a', fontSize: 14 }}>✓ 分析完成！请在「记录」查看详细结果</span>
+          </div>
+        )}
+        <div className="card-store fade-in">
+          <div style={{ textAlign: 'center', marginBottom: 24 }}>
+            <span className="display-lg" style={{ display: 'block', fontSize: 28, marginBottom: 8 }}>拍照上传试卷</span>
+            <span className="caption">支持自动识别题目与错题，越清晰越准确</span>
+          </div>
+          <input placeholder="考试名称（可选，如：期中考试）" value={examName} onChange={e => setExamName(e.target.value)} className="input" style={{ marginBottom: 16 }} />
+          <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={onFile} style={{ display: 'none' }} />
+          {preview ? (
+            <div style={{ position: 'relative', borderRadius: 18, overflow: 'hidden', background: '#f5f5f7', marginBottom: 16 }}>
+              <img src={preview} alt="预览" style={{ width: '100%', maxHeight: 320, objectFit: 'contain', display: 'block' }} />
+              <button onClick={onClear} className="btn-utility" style={{ position: 'absolute', top: 12, right: 12, borderRadius: '50%', width: 32, height: 32, padding: 0 }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
+          ) : (
+            <button onClick={() => fileRef.current?.click()} className="upload-area">
+              <div style={{ fontSize: 40, marginBottom: 8 }}>📷</div>
+              <span className="caption">点击拍照或选择图片</span>            </button>
+          )}
+          <button onClick={onUpload} disabled={!file || uploading || !hasStudent} className="btn-blue" style={{ width: '100%' }}>
+            {uploading ? (
+              <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                <span className="spinner" />
+                正在分析中…
+              </span>
+            ) : '开始分析'}
+          </button>
+          {error && (
+            <div className="card-store" style={{ marginTop: 16, background: '#fef2f2', borderColor: '#fecaca' }}>
+              <span className="caption" style={{ color: '#dc2626', fontWeight: 600 }}>{error}</span>            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}/* ================================================================
+   HISTORY TAB
+   ================================================================ */
+function HistoryTab({ exams, selExam, onSelect, onDelete }: { exams: Exam[]; selExam: Exam | null; onSelect: (e: Exam | null) => void; onDelete: (id: string) => void }) {
+  if (selExam) return <ExamDetail exam={selExam} onBack={() => onSelect(null)} onDelete={onDelete} />;
+  return (
+    <section className="tile tile-white" style={{ padding: '0 24px 80px' }}>
+      <div className="container-sm">
+        {exams.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '80px 0' }}>
+            <span className="display-lg" style={{ display: 'block', marginBottom: 8, fontSize: 28 }}>暂无记录</span>            <span className="caption">先上传试卷开始吧</span>
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: 8 }}>
+            {exams.map(exam => {
+              const correct = exam.questions.filter(q => q.isCorrect).length;              const p = pct(exam.totalScore, exam.maxScore);
+              return (
+                <div key={exam.id} onClick={() => onSelect(exam)} className="card-store history-row" style={{ cursor: 'pointer' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <span className="body-strong">{exam.name || exam.subject}</span>
+                      <span className="body-strong" style={{ color: color(p) }}>{exam.totalScore}/{exam.maxScore}</span>
+                      <span className={'badge-pill ' + (p >= 80 ? 'badge-green' : p >= 60 ? 'badge-amber' : 'badge-red')}>{p}%</span>
+                    </div>
+                    <p className="caption" style={{ marginTop: 4 }}>{exam.student?.name || '未知'} · {new Date(exam.examDate).toLocaleDateString('zh-CN')} · 答对 {correct}/{exam.questions.length}</p>                  </div>
+                  <button onClick={e => { e.stopPropagation(); onDelete(exam.id); }} className="btn-link-sm" style={{ color: '#ff3b30', marginLeft: 12 }}>删除</button>
+                </div>
+              );
+            })}
+          </div>        )}
+      </div>
+    </section>
+  );
+}
+
+/* ================================================================
+   EXAM DETAIL
+   ================================================================ */
+function ExamDetail({ exam, onBack, onDelete }: { exam: Exam; onBack: () => void; onDelete: (id: string) => void }) {  const mistakes = exam.questions.filter(q => !q.isCorrect);
+  const p = pct(exam.totalScore, exam.maxScore);
+  return (
+    <>
+      <section className="tile tile-dark">
+        <div className="container-sm" style={{ textAlign: 'center' }}>
+          <button onClick={onBack} className="btn-link-sm" style={{ color: '#2997ff', display: 'inline-block', marginBottom: 24 }}>← 返回列表</button>
+          <span className="display-hero" style={{ color: '#f5f5f7', display: 'block', marginBottom: 8 }}>{exam.name || exam.subject}</span>          <p className="caption" style={{ color: '#a1a1a6', marginBottom: 32 }}>{exam.student?.name || '}知'} · {new Date(exam.examDate).toLocaleDateString('zh-CN')}</p>
+          <div style={{ marginBottom: 8 }}>
+            <span className="display-hero" style={{ color: color(p) }}>{exam.totalScore}</span>
+            <span style={{ fontSize: 40, fontWeight: 600, color: '#7a7a7a', letterSpacing: 0 }}> / {exam.maxScore}</span>          </div>
+          <p className="tagline" style={{ color: '#a1a1a6', fontWeight: 400, fontSize: 21 }}>正确率 {p}% · 错题 {mistakes.length} 道</p>
+          <div style={{ maxWidth: 240, margin: '24px auto 0' }} className="progress-on-dark">
+            <div className={`progress-fill ${prog(p)}`} style={{ width: p + '%' }} />
+          </div>
+          <button onClick={() => onDelete(exam.id)} className="btn-link-sm" style={{ color: '#ff3b30', display: 'inline-block', marginTop: 24 }}>删除此记录</button>
+        </div>
+      </section>
+
+      {exam.analysis && (
+        <section className="tile tile-parchment">
+          <div className="container-sm">            <span className="display-lg" style={{ display: 'block', fontSize: 24, marginBottom: 16 }}>AI 分析建议</span>
+            <p style={{ fontSize: 17, lineHeight: 1.47, color: '#1d1d1f', whiteSpace: 'pre-line' }}>{exam.analysis}</p>
+          </div>
+        </section>
+      )}      {mistakes.length > 0 && (        <section className="tile tile-white">
+          <div className="container-sm">
+            <span className="display-lg" style={{ display: 'block', fontSize: 24, marginBottom: 24 }}>错题 ({mistakes.length})</span>
+            <div style={{ display: 'grid', gap: 8 }}>
+              {mistakes.map(q => (
+                <div key={q.id} className="card-store" style={{ padding: 16 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                    <span className="badge-pill badge-red">第 {q.number} 题</span>
+                    <span className="caption" style={{ color: '#ff3b30', fontWeight: 600 }}>{q.score}/{q.maxScore}</span>
+                  </div>
+                  {q.content && <p style={{ fontSize: 17, color: '#1d1d1f', lineHeight: 1.47 }}>{q.content}</p>}
+                  {q.knowledgePoint && <p className="caption" style={{ marginTop: 8, fontWeight: 600, color: '#333' }}>📌 {q.knowledgePoint}</p>}
+                  {q.suggestion && <p className="caption" style={{ marginTop: 4 }}>💡 {q.suggestion}</p>}
+                </div>
+              ))}
+            </div>          </div>
+        </section>
+      )}      <section className="tile tile-parchment">
+        <div className="container-sm">
+          <span className="display-lg" style={{ display: 'block', fontSize: 24, marginBottom: 24 }}>全部题目</span>          <div style={{ display: 'grid', gap: 1 }}>
+            {exam.questions.map(q => (
+              <div key={q.id} className="card-store q-row">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <span className={'dot ' + (q.isCorrect ? 'dot-green' : 'dot-red')} />
+                  <span className="body-strong">第 {q.number} 题</span>
+                  {q.content && <span className="caption" style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.content}</span>}
+                </div>
+                <span className="caption" style={{ fontWeight: 600, color: q.isCorrect ? '#34c759' : '#ff3b30' }}>{q.score}/{q.maxScore}</span>
+              </div>
+            ))}
+          </div>
+        </div>      </section>
+
+      {exam.rawResponse && (
+        <section className="tile tile-dark">
+          <details className="container-sm">            <summary className="btn-link-sm" style={{ color: '#a1a1a6' }}>查看 AI 原始响应</summary>
+            <pre className="scroll-thin code-block">{exam.rawResponse}</pre>
+          </details>
+        </section>
+      )}
+    </>
   );
 }

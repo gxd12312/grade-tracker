@@ -32,9 +32,10 @@ const config: Config = {
         },
       },
       borderRadius: {
-        lg: 'var(--radius)',
-        md: 'calc(var(--radius) - 2px)',
-        sm: 'calc(var(--radius) - 4px)',
+        lg: '18px',
+        md: '11px',
+        sm: '8px',
+        pill: '9999px',
       },
     },
   },
